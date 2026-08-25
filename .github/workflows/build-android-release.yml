@@ -1,0 +1,136 @@
+name: Build & Release Android (CitronNex)
+
+# Builds the mainline debug+release APKs (arm64-v8a, Nextendo Network wired in via
+# ENABLE_WEB_SERVICE) on every push to nextendo-android, and republishes them under
+# the rolling "latest-android" release tag, signed with the project's own release key
+# (ANDROID_KEYSTORE_* secrets) so installs update in place instead of needing an
+# uninstall each time.
+#
+# Adapted from upstream NextendoNetwork/citron-nextendo's main-branch build-android.yml:
+# dropped the Snapdragon-8-Elite variant job (not relevant here), and switched
+# ENABLE_WEB_SERVICE from OFF to ON since that's the entire point of this fork.
+
+on:
+  push:
+    branches: [nextendo-android]
+    paths:
+      - 'src/**'
+      - '.github/workflows/build-android-release.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build APKs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get short commit hash
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            wget unzip curl git cmake ninja-build build-essential ccache \
+            pkg-config zip glslang-tools nasm perl autoconf automake libtool
+
+      - name: Install Android SDK command-line tools
+        run: |
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          mkdir -p "$HOME/android-sdk/cmdline-tools"
+          unzip -q cmdline-tools.zip -d "$HOME/android-sdk/cmdline-tools"
+          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$HOME/android-sdk/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Accept licenses, install NDK/CMake
+        run: |
+          yes | sdkmanager --sdk_root="$HOME/android-sdk" --licenses > /dev/null || true
+          sdkmanager --sdk_root="$HOME/android-sdk" \
+            "platform-tools" "platforms;android-37.0" "build-tools;37.0.0" \
+            "ndk;26.1.10909125" "cmake;3.22.1"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: android-ccache-${{ hashFiles('src/**/CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            android-ccache-${{ hashFiles('src/**/CMakeLists.txt') }}-
+            android-ccache-
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-${{ hashFiles('vcpkg.json') }}-${{ github.sha }}
+          restore-keys: |
+            vcpkg-archives-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-archives-
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build debug + release APKs
+        working-directory: src/android
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleMainlineRelease assembleMainlineDebug --console=plain
+
+      - name: Wipe decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Collect APKs
+        working-directory: src/android
+        run: |
+          mkdir -p artifacts
+          cp app/build/outputs/apk/mainline/release/app-mainline-release.apk artifacts/CitronNex-release.apk
+          cp app/build/outputs/apk/mainline/debug/app-mainline-debug.apk artifacts/CitronNex-debug.apk
+
+      - name: Delete previous rolling release
+        run: gh release delete latest-android --repo "${{ github.repository }}" --cleanup-tag -y || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-android
+          name: "CitronNex (Android) - ${{ steps.vars.outputs.sha_short }}"
+          prerelease: false
+          files: src/android/artifacts/*.apk
+          body: |
+            Automated build from commit [`${{ steps.vars.outputs.sha_short }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+            Citron Neo + Nextendo Network (account sign-in, friends, cloud save, LDN population), arm64-v8a only.
+            Signed with the project's own release key -- installs update in place over any previous build from this same key (including the manually-built v1.0.0).
+
+            - **CitronNex-release.apk** -- minified release build. Use this one.
+            - **CitronNex-debug.apk** -- unminified debug build, for when something crashes and you need a fuller stacktrace.
