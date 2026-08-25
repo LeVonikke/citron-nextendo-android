@@ -32,6 +32,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # actions/checkout's default fetch-depth (1) shallow-clones submodules too, and
+          # vcpkg manifest mode needs full history in externals/vcpkg to resolve pinned
+          # port version trees (hit this exact error locally: "failed to unpack tree
+          # object ... vcpkg was cloned as a shallow repository").
+          fetch-depth: 0
 
       - name: Get short commit hash
         id: vars
