@@ -42,6 +42,7 @@
 #include "core/core.h"
 #include "core/cpu_manager.h"
 #include "core/crypto/key_manager.h"
+#include "core/nextendo/history_sync.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -431,6 +432,7 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     std::unique_lock lock(m_mutex);
     m_session_cv.wait(lock, [this] { return !m_session_active; });
     m_session_active = true;
+    m_emulation_start_time = std::chrono::steady_clock::now();
 
     // Create the render window.
     {
@@ -513,6 +515,17 @@ void EmulationSession::ShutdownEmulation() {
 
     // Shutdown the main emulated process
     if (m_load_result == Core::SystemResultStatus::Success) {
+        // Grab what Nextendo history needs before ShutdownMainProcess() tears down the loader.
+        const u64 program_id = m_system.GetApplicationProcessProgramID();
+        const auto session_seconds = static_cast<u64>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - m_emulation_start_time)
+                .count());
+        std::string game_name;
+        std::vector<u8> icon_bytes;
+        void(m_system.GetAppLoader().ReadTitle(game_name));
+        void(m_system.GetAppLoader().ReadIcon(icon_bytes));
+
         m_system.DetachDebugger();
         m_system.ShutdownMainProcess();
         m_detached_tasks.WaitForAllTasks();
@@ -521,6 +534,8 @@ void EmulationSession::ShutdownEmulation() {
             std::scoped_lock window_lock(m_window_mutex);
             m_window.reset();
         }
+        Nextendo::HistorySync::RecordSessionAndSync(program_id, session_seconds, game_name,
+                                                     icon_bytes);
         OnEmulationStopped(Core::SystemResultStatus::Success);
         return;
     }

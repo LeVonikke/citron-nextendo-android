@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <android/native_window_jni.h>
+#include <chrono>
 #include <optional>
 #include "common/android/applets/software_keyboard.h"
 #include "common/detached_tasks.h"
@@ -106,4 +107,9 @@ private:
 
     // Program index for next boot
     std::atomic<s32> m_next_program_index = -1;
+
+    // Set at the top of InitializeEmulation; used by ShutdownEmulation to report this session's
+    // play time to Nextendo (see core/nextendo/history_sync.h -- desktop has PlayTimeManager for
+    // this, Android doesn't have an equivalent yet).
+    std::chrono::steady_clock::time_point m_emulation_start_time;
 };

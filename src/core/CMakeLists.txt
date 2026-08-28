@@ -1213,6 +1213,8 @@ add_library(core STATIC
     memory/dmnt_cheat_types.h
     memory/dmnt_cheat_vm.cpp
     memory/dmnt_cheat_vm.h
+    nextendo/history_sync.cpp
+    nextendo/history_sync.h
     nextendo/ldn_counts.cpp
     nextendo/ldn_counts.h
     nextendo/save_sync.cpp
