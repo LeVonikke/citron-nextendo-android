@@ -9,6 +9,12 @@ name: Build & Release Android (CitronNex)
 # Adapted from upstream NextendoNetwork/citron-nextendo's main-branch build-android.yml:
 # dropped the Snapdragon-8-Elite variant job (not relevant here), and switched
 # ENABLE_WEB_SERVICE from OFF to ON since that's the entire point of this fork.
+#
+# conn-test runs in parallel with build-apk and gates release: it builds and runs
+# nextendo_conn_test (src/nextendo_conn_test), a small host executable that calls the
+# real WebService::NextendoApi code (same nextendo_api.cpp the app ships) against the
+# live backend with no account needed. If the backend isn't reachable, release never
+# runs -- added after a build shipped with sign-in silently unable to connect.
 
 on:
   push:
@@ -23,11 +29,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-apk:
     name: Build APKs
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      sha_short: ${{ steps.vars.outputs.sha_short }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,10 +92,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/vcpkg/archives
-          key: vcpkg-archives-${{ hashFiles('vcpkg.json') }}-${{ github.sha }}
+          key: vcpkg-archives-android-${{ hashFiles('vcpkg.json') }}-${{ github.sha }}
           restore-keys: |
-            vcpkg-archives-${{ hashFiles('vcpkg.json') }}-
-            vcpkg-archives-
+            vcpkg-archives-android-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-archives-android-
 
       - name: Decode release keystore
         env:
@@ -119,6 +125,76 @@ jobs:
           cp app/build/outputs/apk/mainline/release/app-mainline-release.apk artifacts/CitronNex-release.apk
           cp app/build/outputs/apk/mainline/debug/app-mainline-debug.apk artifacts/CitronNex-debug.apk
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: src/android/artifacts/*.apk
+          retention-days: 7
+
+  conn-test:
+    name: Nextendo backend connectivity test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build build-essential ccache pkg-config
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: conntest-ccache-${{ hashFiles('src/common/**', 'src/web_service/**') }}-${{ github.sha }}
+          restore-keys: |
+            conntest-ccache-${{ hashFiles('src/common/**', 'src/web_service/**') }}-
+            conntest-ccache-
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-host-${{ hashFiles('vcpkg.json') }}-${{ github.sha }}
+          restore-keys: |
+            vcpkg-archives-host-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-archives-host-
+
+      - name: Configure (common + web_service only)
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+        run: |
+          cmake -G Ninja -S . -B build-conntest \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_QT=0 -DENABLE_SDL2=0 -DENABLE_WEB_SERVICE=1 -DENABLE_OPENSSL=1 \
+            -DCITRON_TESTS=0 -DCITRON_SHADER_TOOL=0 -DCITRON_ROOM=0 \
+            -DCITRON_USE_BUNDLED_VCPKG=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build nextendo_conn_test
+        env:
+          CCACHE_DIR: /home/runner/.ccache
+        run: ninja -C build-conntest nextendo_conn_test
+
+      - name: Run connectivity check
+        run: ./build-conntest/bin/nextendo_conn_test
+
+  release:
+    name: "Release Android Nightly"
+    needs: [build-apk, conn-test]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: artifacts
+
       - name: Delete previous rolling release
         run: gh release delete latest-android --repo "${{ github.repository }}" --cleanup-tag -y || true
         env:
@@ -128,14 +204,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-android
-          name: "CitronNex (Android) - ${{ steps.vars.outputs.sha_short }}"
+          name: "CitronNex (Android) - ${{ needs.build-apk.outputs.sha_short }}"
           prerelease: false
-          files: src/android/artifacts/*.apk
+          files: artifacts/*.apk
           body: |
-            Automated build from commit [`${{ steps.vars.outputs.sha_short }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+            Automated build from commit [`${{ needs.build-apk.outputs.sha_short }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
 
             Citron Neo + Nextendo Network (account sign-in, friends, cloud save, LDN population), arm64-v8a only.
             Signed with the project's own release key -- installs update in place over any previous build from this same key (including the manually-built v1.0.0).
+
+            Nextendo backend connectivity verified against production before this release was published (see the conn-test job).
 
             - **CitronNex-release.apk** -- minified release build. Use this one.
             - **CitronNex-debug.apk** -- unminified debug build, for when something crashes and you need a fuller stacktrace.

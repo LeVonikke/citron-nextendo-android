@@ -74,4 +74,4 @@ dtrace-out/
 *.diff
 .cache/
 
-.diagnostics/
+.diagnostics/build-conntest/

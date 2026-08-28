@@ -263,6 +263,12 @@ endif()
 
 if (ENABLE_WEB_SERVICE)
     add_subdirectory(web_service)
+    if (NOT ANDROID)
+        # Host-runnable smoke test for the Nextendo Network backend -- same
+        # WebService::NextendoApi code the app ships, no account/token needed. Run before
+        # publishing a release; see src/nextendo_conn_test/nextendo_conn_test.cpp.
+        add_subdirectory(nextendo_conn_test)
+    endif()
 endif()
 
 if (ANDROID)
