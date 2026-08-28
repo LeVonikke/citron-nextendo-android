@@ -10,11 +10,17 @@ name: Build & Release Android (CitronNex)
 # dropped the Snapdragon-8-Elite variant job (not relevant here), and switched
 # ENABLE_WEB_SERVICE from OFF to ON since that's the entire point of this fork.
 #
-# conn-test runs in parallel with build-apk and gates release: it builds and runs
-# nextendo_conn_test (src/nextendo_conn_test), a small host executable that calls the
-# real WebService::NextendoApi code (same nextendo_api.cpp the app ships) against the
-# live backend with no account needed. If the backend isn't reachable, release never
-# runs -- added after a build shipped with sign-in silently unable to connect.
+# conn-test runs in parallel with build-apk: it builds and runs nextendo_conn_test
+# (src/nextendo_conn_test), a small host executable that calls the real
+# WebService::NextendoApi code (same nextendo_api.cpp the app ships) against the live
+# backend with no account needed. Informational only, does NOT gate release -- confirmed
+# via a curl -v debug step that GitHub Actions' runner IPs get a Cloudflare "cf-mitigated:
+# challenge" (403, managed JS challenge) from nextendo.network every time, while the same
+# request from a home connection passes clean. That's an IP-reputation block on
+# datacenter/CI ranges, not a signal about whether this build's code is correct, so it
+# can't be a hard gate here -- it would fail on every single run regardless of the app.
+# Still useful to run+log in case that ever changes on the backend side. Run it locally
+# (this box, or anywhere non-datacenter) before a release you actually want gated on it.
 
 on:
   push:
@@ -192,11 +198,15 @@ jobs:
           curl -v --max-time 15 https://nextendo.network/api/health || true
 
       - name: Run connectivity check
+        # Informational -- see the note at the top of this file. A failure here on
+        # GitHub-hosted runners is expected (Cloudflare challenges the runner's IP) and
+        # must not fail the job / block release.
+        continue-on-error: true
         run: ./build-conntest/bin/nextendo_conn_test
 
   release:
     name: "Release Android Nightly"
-    needs: [build-apk, conn-test]
+    needs: [build-apk] # conn-test is informational only -- see its job's note
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -224,7 +234,7 @@ jobs:
             Citron Neo + Nextendo Network (account sign-in, friends, cloud save, LDN population), arm64-v8a only.
             Signed with the project's own release key -- installs update in place over any previous build from this same key (including the manually-built v1.0.0).
 
-            Nextendo backend connectivity verified against production before this release was published (see the conn-test job).
+            The conn-test job checked the Nextendo backend from this runner (informational -- GitHub Actions' IPs get Cloudflare-challenged there, so its result doesn't gate this release).
 
             - **CitronNex-release.apk** -- minified release build. Use this one.
             - **CitronNex-debug.apk** -- unminified debug build, for when something crashes and you need a fuller stacktrace.
