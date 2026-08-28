@@ -184,6 +184,13 @@ jobs:
           CCACHE_DIR: /home/runner/.ccache
         run: ninja -C build-conntest nextendo_conn_test
 
+      - name: Debug raw network reachability
+        if: always()
+        run: |
+          echo "--- DNS ---"; getent hosts nextendo.network || true
+          echo "--- curl -v (runner's own network path) ---"
+          curl -v --max-time 15 https://nextendo.network/api/health || true
+
       - name: Run connectivity check
         run: ./build-conntest/bin/nextendo_conn_test
 
