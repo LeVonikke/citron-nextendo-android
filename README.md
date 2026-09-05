@@ -1,5 +1,7 @@
 # Citron Neo — Nextendo Network / NZ:P Edition
 
+![C++](https://img.shields.io/badge/C%2B%2B-blue) ![Status](https://img.shields.io/badge/status-active-brightgreen) ![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Windows%20%7C%20Linux-lightgrey)
+
 A fork of the [Citron](https://git.citron-emu.org/citron/emu) with two
 purposes:
 
